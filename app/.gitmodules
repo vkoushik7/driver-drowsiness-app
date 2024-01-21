@@ -1,0 +1,3 @@
+[submodule "driver-drowsiness-app"]
+	path = driver-drowsiness-app
+	url = https://github.com/vkoushik7/driver-drowsiness-app.git
