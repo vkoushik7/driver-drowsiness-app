@@ -4,6 +4,10 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -12,36 +16,30 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.util.Base64
 import android.view.Surface
 import android.view.TextureView
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.example.drowsiness_app.GeocodeResponse
 import com.example.drowsiness_app.RetrofitInstance
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
-import org.json.JSONObject
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceContour
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
-import java.io.ByteArrayOutputStream
-import java.io.IOException
 import kotlin.math.pow
 import kotlin.math.round
+import kotlin.math.sqrt
 
 class Warningspage : AppCompatActivity() {
 
+    private var EAR_THRESHOLD = 0.19
     private lateinit var locationManager: LocationManager
     private lateinit var currentspeed: TextView
     private lateinit var overspeed: TextView
@@ -53,9 +51,8 @@ class Warningspage : AppCompatActivity() {
     private var presentspeed: Double = 0.0
     private var speedlimit: Int = 0
     private var mapsapikey: String? = ""
-    private var serverapikey: String? = ""
-    private val handler = Handler(Looper.getMainLooper())
     private var lastRequestTime = 0L
+    private var driveStartTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,8 +65,19 @@ class Warningspage : AppCompatActivity() {
         camView = findViewById(R.id.camView)
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         mapsapikey = getApiKeyFromMetadata()
-        serverapikey = getServerKeyFromMetadata()
+        lastRequestTime = System.currentTimeMillis()
+        driveStartTime = lastRequestTime
         startLocationUpdates()
+
+        val options =
+                FaceDetectorOptions.Builder()
+                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                        .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
+                        .enableTracking()
+                        .build()
+
+        val detector = FaceDetection.getClient(options)
 
         camView.surfaceTextureListener =
                 object : TextureView.SurfaceTextureListener {
@@ -96,14 +104,101 @@ class Warningspage : AppCompatActivity() {
                     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
                         // Handle updates
                         val currentTime = System.currentTimeMillis()
-                        if (currentTime - lastRequestTime >= 500) { // 500 milliseconds = 0.5 second
+                        if (currentTime - lastRequestTime >= 1000) {
                             val img = camView.bitmap
-                            img?.let { check_drowsiness(it) }
+                            img?.let {
+                                val image = InputImage.fromBitmap(it, 0)
+                                detector.process(image)
+                                        .addOnSuccessListener { faces ->
+                                            if (faces.size == 0) {
+                                                displayDrowsy("NO FACES DETECTED!!")
+                                            } else {
+                                                println("Number of detected faces: ${faces.size}")
+                                                for (face in faces) {
+                                                    plotPointsOnEyes(face)
+                                                }
+                                            }
+                                        }
+                                        .addOnFailureListener { e ->
+                                            println(
+                                                    "Face Detection frontal face detections from tensorflow model errors: " +
+                                                            e
+                                            )
+                                        }
+                            }
                             lastRequestTime = currentTime
+                        }
+                        if (currentTime - driveStartTime >= 3 * 60 * 60 * 1000) {
+                            displayDrowsy("Its time to take a break")
                         }
                     }
                 }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun plotPointsOnEyes(face: Face) {
+        val overlay = findViewById<ImageView>(R.id.overlay)
+        println("came to point the points")
+        val bitmap = Bitmap.createBitmap(overlay.width, overlay.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val paint =
+                Paint().apply {
+                    color = Color.RED
+                    style = Paint.Style.STROKE
+                    strokeWidth = 4f
+                }
+
+        val bounds = face.boundingBox
+        canvas.drawRect(bounds, paint)
+
+        var eare = 0.0
+        var c = 0
+        val left_eye = face.getContour(FaceContour.LEFT_EYE)?.points
+        if (left_eye != null) {
+            val p1 = left_eye[3]
+            val p2 = left_eye[13]
+            val p3 = left_eye[5]
+            val p4 = left_eye[11]
+            val p5 = left_eye[0]
+            val p6 = left_eye[8]
+            val d1 = findDistance(p1, p2)
+            val d2 = findDistance(p3, p4)
+            val d3 = findDistance(p5, p6)
+            eare += ((d1 + d2) / (2.0 * d3))
+            c+=1
+        }
+
+        val right_eye = face.getContour(FaceContour.RIGHT_EYE)?.points
+        if (right_eye != null) {
+            val p1 = right_eye[3]
+            val p2 = right_eye[13]
+            val p3 = right_eye[5]
+            val p4 = right_eye[11]
+            val p5 = right_eye[0]
+            val p6 = right_eye[8]
+            val d1 = findDistance(p1, p2)
+            val d2 = findDistance(p3, p4)
+            val d3 = findDistance(p5, p6)
+            eare += ((d1 + d2) / (2.0 * d3))
+            c+=1
+        }
+
+        if (c==2) eare/=2
+
+        if (eare<=EAR_THRESHOLD) displayDrowsy("DROWSY!!")
+
+        overlay.setImageBitmap(bitmap)
+    }
+
+    private fun findDistance(point1: PointF, point2: PointF): Double {
+        val a = point1.x.toDouble()
+        val b = point1.y.toDouble()
+        val c = point2.x.toDouble()
+        val d = point2.y.toDouble()
+        val a1 = (c - a).pow(2.0)
+        val a2 = (d - b).pow(2.0)
+        return sqrt(a1 + a2)
     }
 
     private fun openCamera() {
@@ -242,16 +337,6 @@ class Warningspage : AppCompatActivity() {
         }
     }
 
-    private fun getServerKeyFromMetadata(): String? {
-        return try {
-            val applicationInfo =
-                    packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
-            applicationInfo.metaData.getString("com.google.android.geo.SERVER_KEY")
-        } catch (e: PackageManager.NameNotFoundException) {
-            e.printStackTrace()
-            null
-        }
-    }
     private fun startLocationUpdates() {
         try {
             locationManager.requestLocationUpdates(
@@ -287,85 +372,24 @@ class Warningspage : AppCompatActivity() {
                 }
             }
 
-    fun check_drowsiness(img: Bitmap) {
-        val bimg = bitmapToBase64(img)
-        CoroutineScope(Dispatchers.Main).launch {
-            val stres = checkfromapi(bimg)
-            println("stres: ${stres}")
-            var res = stres?.toInt()
-            withContext(Dispatchers.Main) { displayDrowsyOnScreen(res!!) }
-        }
-    }
-    fun bitmapToBase64(bitmap: Bitmap): String {
-        val byteArrayOutputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream)
-        val byteArray = byteArrayOutputStream.toByteArray()
-        return Base64.encodeToString(byteArray, Base64.DEFAULT)
-    }
-
-    suspend fun checkfromapi(base64Image: String): String? =
-            withContext(Dispatchers.IO) {
-                // println("start of checkfrom api function")
-                val client = OkHttpClient()
-                var isOk = false
-                val jsonObject = JSONObject()
-                jsonObject.put("image", base64Image)
-
-                val requestBody =
-                        RequestBody.create(
-                                "application/json; charset=utf-8".toMediaTypeOrNull(),
-                                jsonObject.toString()
-                        )
-
-                val request =
-                        Request.Builder()
-                                .url("http://54.89.143.165:5000/check_drowsiness")
-                                .post(requestBody)
-                                .addHeader("x-api-key", serverapikey!!)
-                                .build()
-
-                // println("came upto request complete")
-
-                try {
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) {
-                            // println("Unexpected code $response")
-                            throw IOException("Unexpected code $response")
-                        }
-                        val responseBody = response.body?.string()
-                        println("returning the value from api: $responseBody")
-                        return@withContext responseBody
-                    }
-                } catch (e: Exception) {
-                    // Handle the exception (e.g., show an error message to the user, log the error,
-                    // etc.)
-                    println("this is from catch expression ${e}")
-                    return@withContext "-1"
-                    null
-                }
-            }
-
     private fun roundLocation(k: Double): Double {
         val m = 10.0.pow(2)
         return round(k * m) / m
     }
 
-    private fun displayDrowsyOnScreen(a: Int) {
-        var str: String = ""
-        if (a == 1) str = "DROWSY"
-        else if (a == 2) str = "NOT DROWSY" else if (a == -1) str = "NO FACE DETECTED!!"
-        drowsyView.text = str
-    }
     private fun displaySpeedOnScreen(speed: Double) {
-        currentspeed.text = "Current speed: ${String.format("%.2f", speed)} km/h"
+        runOnUiThread { currentspeed.text = "Current speed: ${String.format("%.2f", speed)} km/h" }
     }
 
     private fun setSpeedLimitOnScreen() {
-        speedlimitview.text = "Speed limit: $speedlimit km/h"
+        runOnUiThread { speedlimitview.text = "Speed limit: $speedlimit km/h" }
         checkOverSpeeding()
     }
     override fun onBackPressed() {
         super.onBackPressed()
         finishAffinity()
+    }
+    fun displayDrowsy(an: String) {
+        runOnUiThread { drowsyView.text = an }
     }
 }
