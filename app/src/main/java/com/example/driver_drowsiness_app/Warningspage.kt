@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PointF
+import android.graphics.PorterDuff
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -72,7 +73,8 @@ class Warningspage : AppCompatActivity() {
         val options =
                 FaceDetectorOptions.Builder()
                         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                        //
+                        // .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
                         .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
                         .enableTracking()
                         .build()
@@ -149,6 +151,7 @@ class Warningspage : AppCompatActivity() {
                     strokeWidth = 4f
                 }
 
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         val bounds = face.boundingBox
         canvas.drawRect(bounds, paint)
 
@@ -166,7 +169,7 @@ class Warningspage : AppCompatActivity() {
             val d2 = findDistance(p3, p4)
             val d3 = findDistance(p5, p6)
             eare += ((d1 + d2) / (2.0 * d3))
-            c+=1
+            c += 1
         }
 
         val right_eye = face.getContour(FaceContour.RIGHT_EYE)?.points
@@ -181,12 +184,13 @@ class Warningspage : AppCompatActivity() {
             val d2 = findDistance(p3, p4)
             val d3 = findDistance(p5, p6)
             eare += ((d1 + d2) / (2.0 * d3))
-            c+=1
+            c += 1
         }
 
-        if (c==2) eare/=2
+        if (c == 2) eare /= 2
 
-        if (eare<=EAR_THRESHOLD) displayDrowsy("DROWSY!!")
+        if (eare <= EAR_THRESHOLD) displayDrowsy("DROWSY!!")
+        else drowsyView.visibility = TextView.INVISIBLE
 
         overlay.setImageBitmap(bitmap)
     }
@@ -390,6 +394,7 @@ class Warningspage : AppCompatActivity() {
         finishAffinity()
     }
     fun displayDrowsy(an: String) {
+        drowsyView.visibility = TextView.VISIBLE
         runOnUiThread { drowsyView.text = an }
     }
 }
